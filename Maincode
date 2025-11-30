@@ -1,0 +1,226 @@
+// Set up pins
+#include <Adafruit_NeoPixel.h>
+#include <math.h>
+
+#define NeoP 5   // Neopixel pin
+#define NumP 8 // number of neopixels in Ring
+#define motorpin 11
+#define sliderpin 0
+#define temppin 1
+
+const int Pink[] = {255, 20, 147};  //declare colours as arrays
+const int Green[] = {0, 255, 0};
+const int Yellow[] = {255, 255, 0};
+const int Orange[] = {255, 50, 0}; 
+const int Red[] = {255, 0, 0};
+const int Magenta[] = {255, 0, 255};
+const int None[] = {0,0,0};
+const int* colourmodes[] = {Pink, Green, Yellow,  Orange, Red}; //Group colours for indexing (less efort than using a table)
+const float k = 0.2;
+float timek = 1.5;  //speed coefficient
+float speedk;
+
+unsigned long nextBlinkTime = 0;
+unsigned long nextvtime  = 0;
+unsigned long nexttemptime = 0;
+
+// State variables for blink
+int blinkspeed = -1;
+const int* blinkcolour = None;
+bool blinkstate = false;
+int larsonpos = 0;
+
+// State variables for vibrate
+int vlevel = 0;
+int vcount = 0;
+bool vstate = false;
+
+bool hightemp = false;
+
+
+Adafruit_NeoPixel pixels = Adafruit_NeoPixel(NumP, NeoP, NEO_GRB + NEO_KHZ800);
+
+void setcolour(const int* a, int ind){ //helper function to set colours accepts an array and pixelindex
+  pixels.setPixelColor(ind, pixels.Color(a[0],a[1],a[2]));
+   //recieves the corresponding value from array and index as parameters 
+}
+
+void setAll(const int* c){ //set all pixels to colour and show
+  for(int x = 0; x< NumP; x++){  
+    setcolour(c,x);
+  }
+  pixels.show();
+}
+
+void clearAll(){ //clear all pixels and show
+  for(int x = 0; x< NumP; x++){  
+    setcolour(None,x);
+  }
+  pixels.show();
+}
+
+unsigned long schedule(float t) {return millis() + (t * 100);} // helper function to schedule next event
+
+void wait(float t) {delay(t*1000);} // helper function to set wait time in seconds
+
+int clamp(int n){ //clamp numbers below 1  
+  if (n<1){return 1;}
+  return n;
+}
+
+
+void blink(int speed, int blinktime, const int* c){ //blinks at appropriate speeds for given counts
+  blinkspeed = speed;
+  blinkcolour = c;
+  blinkstate = false;
+  larsonpos = 0;
+  nextBlinkTime = millis();
+  
+  vibrate(speed);
+}  
+
+void updateBlink() {
+  if (blinkspeed < 0 || millis() < nextBlinkTime) return;
+  
+  //speed basically represents an index being passed in which represents goblin class
+  if ((blinkspeed > 0) &&( blinkspeed < 4))  //normal blink activity at relative speeds    
+  {
+    float time = (4-blinkspeed)*k; //inverts speed scale and normalises to usable wait times  
+    
+    if (!blinkstate) {
+      setAll(blinkcolour);
+      blinkstate = true;
+    } else {
+      clearAll();
+      blinkstate = false;
+    }
+    nextBlinkTime = schedule(time);
+  }
+  else if((blinkspeed ==0) || (blinkspeed == 4 ))
+  {  //outliers. larson and constant blink   
+    if (larsonpos >= NumP) larsonpos = 0; // loop continuously
+    
+    setcolour(blinkcolour,larsonpos); //give pixel colour
+    pixels.show();
+    if (blinkspeed ==4){  // for larson scanner introduce wait and stagger when brightenin LEDs
+      
+        setcolour(blinkcolour,larsonpos+1); //give pixel colour after
+     
+      setcolour(blinkcolour,larsonpos+2);
+        
+     
+      setcolour(None,larsonpos);
+      pixels.show();
+      nextBlinkTime = schedule(0.08);
+    }       
+    larsonpos++;
+    
+    if (larsonpos >= NumP && blinkspeed == 0){ //for constant brightness effect only wait once after brightening all LEDs
+      nextBlinkTime = schedule(1);
+    }
+  }
+}
+
+void vibrate(int l){
+  vlevel = l;
+  vcount = 0;
+  vstate = false;
+  nextvtime = millis();
+  if (l < 2) {
+    analogWrite(motorpin, LOW); 
+  }
+}
+
+void updateVibrate() {
+  if (vlevel < 2 || millis() < nextvtime) return;
+    if (vcount >= vlevel && vstate == false) return;//loop
+ 
+  else if (vlevel == 2 || vlevel == 3)
+  {  
+    speedk = (((float)vlevel -1)/2.0);  //gives .5 for level 2 and 1 for level 3
+  }
+  else if (vlevel == 4)
+  {
+    speedk = (float)clamp(vcount - 1)/2.0; //give 0.5 for 1,2,3 and 1 for 4
+  }
+   int intensity = (vlevel* 100/4)+155 ;
+
+  if (!vstate)
+  {
+    analogWrite(motorpin, intensity);  //vibration ON
+    Serial.println("HIGH");
+    vstate = true;
+    nextvtime = schedule(speedk *timek );  //buzz length controlled by speedk
+  }
+  else
+  {
+    digitalWrite(motorpin, LOW);   //vibration OFF
+    Serial.println("LOW");
+    vstate = false;
+    vcount++;
+    nextvtime = schedule((timek*speedk) );
+  }
+  Serial.println(speedk);
+  schedule(10);
+}
+
+
+void tempcheck()
+{  
+ float volt = (analogRead(temppin))*5.0/1023.0;  //reads temperature sensor and converts to voltage
+  float temp = (volt-0.5) *100; //converts voltage to degrees
+  if ((temp > 40) && (hightemp == false)){
+    hightemp = true;
+    wait(.01);
+    for (int i =0; i<5; i++)
+    { //for loop, blinks 8 times
+    	for(int x = 0; x< NumP; x++)
+        {  
+   			setcolour(Magenta,x); //give indexed pixel given colour
+  		}
+      	pixels.show();
+   	 	wait(.2);  
+      
+    	clearAll();
+    	wait(.2);  
+  	}
+  }
+  else if (temp<40){
+    hightemp = false;
+  }
+ 
+}
+
+void setup()
+{
+  Serial.begin(9600);
+  pixels.begin();
+  pinMode(motorpin, OUTPUT);// Set up all the necesarry pinmodes
+  pinMode(sliderpin, INPUT);
+  digitalWrite(motorpin,LOW);
+  clearAll();
+}
+
+void loop() 
+{
+  tempcheck();
+  updateBlink();
+  updateVibrate();
+  Reader();  
+}
+
+void Reader()  ///reads analogue reader from potentiometer and uses that to call lightingmode appropriately
+{
+  float stage = analogRead(sliderpin);  
+  stage = floor(stage*6/1023); //normalize reading from potentiometer into usable representatives for goblin.  
+    
+  int Type = (int)stage;
+  
+  static int lastType = -1;
+  if (Type != lastType) {
+    wait(0.1);
+    blink(Type, 10 +(Type*2), colourmodes[Type]);  // use type to define how long the function runs
+    lastType = Type;
+  }
+  //Serial.println(Type); // print class 
+}
